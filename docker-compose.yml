@@ -1,0 +1,10 @@
+
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+    image: $AWS_REGISTRY/gpt4-bot:latest
+    container_name: gpt4-bot
