@@ -1,6 +1,20 @@
 from env import API_KEY, GUILD_ID, OPENAI_API_KEY, OPENAI_ORG_ID
 import discord
 from openai import OpenAI
+import requests as r
+
+
+def wiki_titles(query: str) -> str:
+    pages = r.get("https://wiki-api.purplelemons.dev/api/titles?q=" + query).json()[
+        "pages"
+    ]
+    return [{"pageid": page["pageid"], "title": page["title"]} for page in pages]
+
+def wiki_content(pageid: int) -> str:
+    return r.get("https://wiki-api.purplelemons.dev/api/page?pageid=" + str(pageid)).json()[
+        "extract"
+    ].replace("\n", " ")
+
 
 user_messages: dict[int, list[dict[str, str]]] = {}
 
