@@ -1,20 +1,9 @@
 from env import API_KEY, GUILD_ID, OPENAI_API_KEY, OPENAI_ORG_ID
 import discord
-from openai import OpenAI
-import requests as r
-
-
-def wiki_titles(query: str) -> str:
-    pages = r.get("https://wiki-api.purplelemons.dev/api/titles?q=" + query).json()[
-        "pages"
-    ]
-    return [{"pageid": page["pageid"], "title": page["title"]} for page in pages]
-
-def wiki_content(pageid: int) -> str:
-    return r.get("https://wiki-api.purplelemons.dev/api/page?pageid=" + str(pageid)).json()[
-        "extract"
-    ].replace("\n", " ")
-
+from openai import OpenAI, Stream
+from openai.types.chat import ChatCompletionChunk
+import json
+from google_search import google_search
 
 user_messages: dict[int, list[dict[str, str]]] = {}
 
@@ -38,24 +27,57 @@ async def reset(interaction: discord.Interaction):
 
 @tree.command(name="chat", description="Chat with GPT4!", guild=guild)
 async def chat(interaction: discord.Interaction, message: str):
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    except:
+        pass
 
     if interaction.user.id not in user_messages:
         user_messages[interaction.user.id] = []
-    user_messages[interaction.user.id].append({"role": "user", "content": message})
+    if message:
+        user_messages[interaction.user.id].append({"role": "user", "content": message})
 
-    response = openai.chat.completions.create(
+    response: Stream[ChatCompletionChunk] = openai.chat.completions.create(
         model="gpt-4-turbo-preview",
         messages=user_messages[interaction.user.id],
         stream=True,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "Search the internet for an answer",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The query to search for",
+                            }
+                        },
+                    },
+                },
+            }
+        ],
     )
-
     content = ""
     for chunk in response:
+        print(chunk.model_dump_json(indent=2))
+        if chunk.choices[0].delta.tool_calls:
+            if chunk.choices[0].delta.tool_calls[0].function.name:
+                function_name = chunk.choices[0].delta.tool_calls[0].function.name
+            content += chunk.choices[0].delta.tool_calls[0].function.arguments
+            continue
         chunk_content = chunk.choices[0].delta.content
         if chunk_content:
             content += chunk_content
             await interaction.edit_original_response(content=content)
+        elif chunk.choices[0].finish_reason == "tool_calls":
+            arguments = json.loads(content)
+            print(arguments)
+            if function_name == "search":
+                search_results = google_search(arguments["query"])
+                await chat(interaction, "")
         elif not chunk.choices[0].finish_reason:
             continue
         else:
