@@ -3,7 +3,7 @@ import discord
 from openai import OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 import json
-from google_search import google_search
+from google_search import turbo_search
 
 user_messages: dict[int, list[dict[str, str]]] = {}
 
@@ -39,14 +39,23 @@ async def chat(interaction: discord.Interaction, message: str):
 
     response: Stream[ChatCompletionChunk] = openai.chat.completions.create(
         model="gpt-4-turbo-preview",
-        messages=user_messages[interaction.user.id],
+        messages=user_messages[interaction.user.id]
+        + [
+            {
+                "role": "system",
+                "content": "The year is 2024. Your knowledge cutoff is April 2023. "
+                "The results of your search operation will be bad unless you use "
+                "specific language. Your query may include several topics. The engine "
+                "is advanced and can handle it.",
+            }
+        ],
         stream=True,
         tools=[
             {
                 "type": "function",
                 "function": {
                     "name": "search",
-                    "description": "Search the internet for an answer",
+                    "description": "This is an advanced search engine that requires you to describe exactly what you want. You can enter as much text as you want, and more complex queries often lead to more precise results.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -66,22 +75,58 @@ async def chat(interaction: discord.Interaction, message: str):
         if chunk.choices[0].delta.tool_calls:
             if chunk.choices[0].delta.tool_calls[0].function.name:
                 function_name = chunk.choices[0].delta.tool_calls[0].function.name
+            tool_id_from_chunk = chunk.choices[0].delta.tool_calls[0].id
+            if tool_id_from_chunk:
+                tool_id = tool_id_from_chunk
             content += chunk.choices[0].delta.tool_calls[0].function.arguments
             continue
         chunk_content = chunk.choices[0].delta.content
         if chunk_content:
             content += chunk_content
             await interaction.edit_original_response(content=content)
+
         elif chunk.choices[0].finish_reason == "tool_calls":
             arguments = json.loads(content)
-            print(arguments)
+            # TODO: make recursive
             if function_name == "search":
-                search_results = google_search(arguments["query"])
-                await chat(interaction, "")
+                search_results = turbo_search(arguments["query"])
+                content = json.dumps(arguments)
+                user_messages[interaction.user.id].append(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": tool_id,
+                                "function": {"name": "search", "arguments": content},
+                                "type": "function",
+                            }
+                        ],
+                    }
+                )
+                user_messages[interaction.user.id].append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "content": json.dumps(search_results),
+                    }
+                )
+                response = openai.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=user_messages[interaction.user.id],
+                    stream=True,
+                )
+                content = ""
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        content += chunk.choices[0].delta.content
+                        await interaction.edit_original_response(content=content)
+                    elif chunk.choices[0].finish_reason:
+                        break
         elif not chunk.choices[0].finish_reason:
             continue
         else:
             break
+    user_messages[interaction.user.id].append({"role": "assistant", "content": content})
 
 
 @client.event
