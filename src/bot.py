@@ -5,8 +5,9 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 import json
 from google_search import turbo_search
 import time
+from message_db import MessageDatabase
 
-user_messages: dict[int, list[ChatCompletionMessageParam]] = {}
+user_messages = MessageDatabase()
 
 openai = OpenAI(api_key=OPENAI_API_KEY, organization=OPENAI_ORG_ID)
 MODEL = "gpt-4"
@@ -34,10 +35,7 @@ async def chat(interaction: discord.Interaction, message: str):
     except:
         pass
 
-    if interaction.user.id not in user_messages:
-        user_messages[interaction.user.id] = []
-    if message:
-        user_messages[interaction.user.id].append({"role": "user", "content": message})
+    user_messages[interaction.user.id].append({"role": "user", "content": message})
 
     current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     response: Stream[ChatCompletionChunk] = openai.chat.completions.create(
@@ -149,14 +147,9 @@ async def on_message(message: discord.Message):
     if message.author == client.user:
         return
     if message.channel.type.name == "private":
-        try:
-            user_messages[message.author.id].append(
-                {"role": "user", "content": message.content}
-            )
-        except KeyError:
-            user_messages[message.author.id] = [
-                {"role": "user", "content": message.content}
-            ]
+        user_messages[message.author.id].append(
+            {"role": "user", "content": message.content}
+        )
         content: str = ""
         assistant_message: None | discord.Message = None
         for chunk in openai.chat.completions.create(
