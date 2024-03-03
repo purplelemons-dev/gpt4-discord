@@ -152,17 +152,28 @@ async def on_message(message: discord.Message):
         )
         content: str = ""
         assistant_message: None | discord.Message = None
+        count = 0
         for chunk in openai.chat.completions.create(
             model=MODEL, messages=user_messages[message.author.id], stream=True
         ):
             if chunk.choices[0].finish_reason:
                 break
             content += chunk.choices[0].delta.content
-            if content:
+            if content and count % 16 == 0:
                 if assistant_message:
-                    await assistant_message.edit(content=content)
+                    # refresh for content length
+                    try:
+                        await assistant_message.edit(content=content)
+                    except:
+                        content = chunk.choices[0].delta.content
+                        assistant_message = await message.channel.send(content=content)
                 else:
                     assistant_message = await message.channel.send(content=content)
+            count += 1
+        await assistant_message.edit(content=content)
+        user_messages[message.author.id].append(
+            {"role": "assistant", "content": content}
+        )
 
 
 @client.event
