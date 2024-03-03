@@ -1,13 +1,15 @@
 from env import API_KEY, GUILD_ID, OPENAI_API_KEY, OPENAI_ORG_ID
 import discord
 from openai import OpenAI, Stream
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 import json
 from google_search import turbo_search
+import time
 
-user_messages: dict[int, list[dict[str, str]]] = {}
+user_messages: dict[int, list[ChatCompletionMessageParam]] = {}
 
 openai = OpenAI(api_key=OPENAI_API_KEY, organization=OPENAI_ORG_ID)
+MODEL = "gpt-4"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -37,13 +39,15 @@ async def chat(interaction: discord.Interaction, message: str):
     if message:
         user_messages[interaction.user.id].append({"role": "user", "content": message})
 
+    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     response: Stream[ChatCompletionChunk] = openai.chat.completions.create(
-        model="gpt-4-turbo-preview",
+        model=MODEL,
         messages=user_messages[interaction.user.id]
         + [
             {
                 "role": "system",
-                "content": "The year is 2024. Your knowledge cutoff is April 2023. "
+                "content": f"The current date is {current_time}. You cannot answer "
+                "questions after 2022 without querying the search function. "
                 "The results of your search operation will be bad unless you use "
                 "specific language. Your query may include several topics. The engine "
                 "is advanced and can handle it.",
@@ -111,17 +115,28 @@ async def chat(interaction: discord.Interaction, message: str):
                     }
                 )
                 response = openai.chat.completions.create(
-                    model="gpt-4-turbo-preview",
+                    model=MODEL,
                     messages=user_messages[interaction.user.id],
                     stream=True,
                 )
                 content = ""
+                count = 0
+                edit_function = interaction.edit_original_response
                 for chunk in response:
+                    if chunk.choices[0].finish_reason:
+                        break
                     if chunk.choices[0].delta.content:
                         content += chunk.choices[0].delta.content
-                        await interaction.edit_original_response(content=content)
-                    elif chunk.choices[0].finish_reason:
-                        break
+                    count += 1
+                    if count % 5 == 0:
+                        try:
+                            await interaction.edit_original_response(content=content)
+                        except:
+                            await interaction.followup.send(
+                                content=chunk.choices[0].delta.content
+                            )
+                            content = ""
+                await interaction.edit_original_response(content=content)
         elif not chunk.choices[0].finish_reason:
             continue
         else:
@@ -130,8 +145,37 @@ async def chat(interaction: discord.Interaction, message: str):
 
 
 @client.event
+async def on_message(message: discord.Message):
+    if message.author == client.user:
+        return
+    if message.channel.type.name == "private":
+        try:
+            user_messages[message.author.id].append(
+                {"role": "user", "content": message.content}
+            )
+        except KeyError:
+            user_messages[message.author.id] = [
+                {"role": "user", "content": message.content}
+            ]
+        content: str = ""
+        assistant_message: None | discord.Message = None
+        for chunk in openai.chat.completions.create(
+            model=MODEL, messages=user_messages[message.author.id], stream=True
+        ):
+            if chunk.choices[0].finish_reason:
+                break
+            content += chunk.choices[0].delta.content
+            if content:
+                if assistant_message:
+                    await assistant_message.edit(content=content)
+                else:
+                    assistant_message = await message.channel.send(content=content)
+
+
+@client.event
 async def on_ready():
     await tree.sync(guild=guild)
 
 
-client.run(API_KEY)
+if __name__ == "__main__":
+    client.run(API_KEY)
